@@ -45,6 +45,7 @@ import type { Earthquake } from '@/services/earthquakes';
 import type { ClimateAnomaly } from '@/services/climate';
 import { ArcLayer } from '@deck.gl/layers';
 import { HeatmapLayer } from '@deck.gl/aggregation-layers';
+import { H3HexagonLayer } from '@deck.gl/geo-layers';
 import type { WeatherAlert } from '@/services/weather';
 import { escapeHtml } from '@/utils/sanitize';
 import { tokenizeForMatch, matchKeyword, matchesAnyKeyword, findMatchingKeywords } from '@/utils/keyword-match';
@@ -153,13 +154,13 @@ const MAP_INTERACTION_MODE: MapInteractionMode =
 
 const DARK_STYLE = SITE_VARIANT === 'happy'
   ? '/map-styles/happy-dark.json'
-  : 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json';
+  : 'https://tiles.openfreemap.org/styles/dark';
 const LIGHT_STYLE = SITE_VARIANT === 'happy'
   ? '/map-styles/happy-light.json'
-  : 'https://basemaps.cartocdn.com/gl/voyager-gl-style/style.json';
+  : 'https://tiles.openfreemap.org/styles/positron';
 
-const FALLBACK_DARK_STYLE = 'https://tiles.openfreemap.org/styles/dark';
-const FALLBACK_LIGHT_STYLE = 'https://tiles.openfreemap.org/styles/positron';
+const FALLBACK_DARK_STYLE = 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json';
+const FALLBACK_LIGHT_STYLE = 'https://basemaps.cartocdn.com/gl/voyager-gl-style/style.json';
 
 // Zoom thresholds for layer visibility and labels (matches old Map.ts)
 // Zoom-dependent layer visibility and labels
@@ -404,12 +405,14 @@ export class DeckGLMap {
       if (this.renderPaused || this.webglLost || !this.maplibreMap) return;
       this.maplibreMap.resize();
       try { this.deckOverlay?.setProps({ layers: this.buildLayers() }); } catch { /* map mid-teardown */ }
+      this.maplibreMap.triggerRepaint();
     }, 150);
     this.debouncedFetchBases = debounce(() => this.fetchServerBases(), 300);
     this.debouncedFetchAircraft = debounce(() => this.fetchViewportAircraft(), 500);
     this.rafUpdateLayers = rafSchedule(() => {
       if (this.renderPaused || this.webglLost || !this.maplibreMap) return;
       try { this.deckOverlay?.setProps({ layers: this.buildLayers() }); } catch { /* map mid-teardown */ }
+      this.maplibreMap?.triggerRepaint();
     });
 
     this.setupDOM();
@@ -476,10 +479,10 @@ export class DeckGLMap {
     mapContainer.style.cssText = 'position: absolute; top: 0; left: 0; width: 100%; height: 100%;';
     wrapper.appendChild(mapContainer);
 
-    // Map attribution (CARTO basemap + OpenStreetMap data)
+    // Map attribution (OpenFreeMap basemap + OpenStreetMap data)
     const attribution = document.createElement('div');
     attribution.className = 'map-attribution';
-    attribution.innerHTML = '© <a href="https://carto.com/attributions" target="_blank" rel="noopener">CARTO</a> © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>';
+    attribution.innerHTML = '© <a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a> © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>';
     wrapper.appendChild(attribution);
 
     this.container.appendChild(wrapper);
@@ -1917,22 +1920,23 @@ export class DeckGLMap {
     });
   }
 
-  private createGpsJammingLayer(): ScatterplotLayer {
-    return new ScatterplotLayer({
+  private createGpsJammingLayer(): H3HexagonLayer {
+    return new H3HexagonLayer({
       id: 'gps-jamming-layer',
       data: this.gpsJammingHexes,
-      getPosition: (d) => [d.lon, d.lat],
-      getRadius: (d) => d.level === 'high' ? 15000 : 10000,
-      getFillColor: (d) => {
-        if (d.level === 'high') return [255, 80, 80, 200] as [number, number, number, number];
-        return [255, 180, 50, 180] as [number, number, number, number];
+      getHexagon: (d: GpsJamHex) => d.h3,
+      getFillColor: (d: GpsJamHex) => {
+        if (d.level === 'high') return [255, 80, 80, 180] as [number, number, number, number];
+        return [255, 180, 50, 140] as [number, number, number, number];
       },
-      radiusMinPixels: 4,
-      radiusMaxPixels: 14,
-      pickable: true,
+      getElevation: 0,
+      extruded: false,
+      filled: true,
       stroked: true,
-      getLineColor: [255, 255, 255, 100] as [number, number, number, number],
+      getLineColor: [255, 255, 255, 80] as [number, number, number, number],
+      getLineWidth: 1,
       lineWidthMinPixels: 1,
+      pickable: true,
     });
   }
 
@@ -3436,14 +3440,15 @@ export class DeckGLMap {
           if (layer === 'flights') this.manageAircraftTimer((input as HTMLInputElement).checked);
           this.render();
           this.onLayerChange?.(layer, (input as HTMLInputElement).checked, 'user');
-          // Show/hide CII legend when toggling the CII layer
           if (layer === 'ciiChoropleth') {
             const ciiLeg = this.container.querySelector('#ciiChoroplethLegend') as HTMLElement | null;
             if (ciiLeg) ciiLeg.style.display = (input as HTMLInputElement).checked ? 'block' : 'none';
           }
+          this.enforceLayerLimit();
         }
       });
     });
+    this.enforceLayerLimit();
 
     // Help button
     const helpBtn = toggles.querySelector('.layer-help-btn');
@@ -3741,6 +3746,7 @@ export class DeckGLMap {
     try {
       this.deckOverlay?.setProps({ layers: this.buildLayers() });
     } catch { /* map may be mid-teardown (null.getProjection) */ }
+    this.maplibreMap.triggerRepaint();
     const elapsed = performance.now() - startTime;
     if (import.meta.env.DEV && elapsed > 16) {
       console.warn(`[DeckGLMap] updateLayers took ${elapsed.toFixed(2)}ms (>16ms budget)`);
@@ -4435,6 +4441,36 @@ export class DeckGLMap {
     setGeoAlertGetter(getAlertsNearLocation);
   }
 
+  private enforceLayerLimit(): void {
+    const MAX_FLAT_LAYERS = 9;
+    const togglesEl = this.container.querySelector('.deckgl-layer-toggles');
+    if (!togglesEl) return;
+    const allToggles = Array.from(togglesEl.querySelectorAll<HTMLInputElement>('.layer-toggle input'))
+      .filter(i => (i.closest('.layer-toggle') as HTMLElement)?.style.display !== 'none');
+    const checked = allToggles.filter(i => i.checked);
+    if (checked.length > MAX_FLAT_LAYERS) {
+      const excess = checked.slice(MAX_FLAT_LAYERS);
+      for (const inp of excess) {
+        inp.checked = false;
+        const layer = inp.closest('.layer-toggle')?.getAttribute('data-layer') as keyof MapLayers | null;
+        if (layer) {
+          this.state.layers[layer] = false;
+        }
+      }
+      this.render();
+    }
+    const activeCount = allToggles.filter(i => i.checked).length;
+    allToggles.forEach(i => {
+      if (!i.checked) {
+        i.disabled = activeCount >= MAX_FLAT_LAYERS;
+        i.closest('.layer-toggle')?.classList.toggle('limit-reached', activeCount >= MAX_FLAT_LAYERS);
+      } else {
+        i.disabled = false;
+        i.closest('.layer-toggle')?.classList.remove('limit-reached');
+      }
+    });
+  }
+
   // UI visibility methods
   public hideLayerToggle(layer: keyof MapLayers): void {
     const toggle = this.container.querySelector(`.layer-toggle[data-layer="${layer}"]`);
@@ -4478,6 +4514,7 @@ export class DeckGLMap {
       if (toggle) toggle.checked = true;
       this.render();
       this.onLayerChange?.(layer, true, 'programmatic');
+      this.enforceLayerLimit();
     }
   }
 
@@ -4488,6 +4525,7 @@ export class DeckGLMap {
     if (toggle) toggle.checked = this.state.layers[layer];
     this.render();
     this.onLayerChange?.(layer, this.state.layers[layer], 'programmatic');
+    this.enforceLayerLimit();
   }
 
   // Get center coordinates for programmatic popup positioning
