@@ -182,6 +182,23 @@ Sentry.init({
     /Cannot read properties of null \(reading '__uv'\)/,
     /Can't find variable: p\d+/,
     /^timeout$/,
+    /Can't find variable: caches/,
+    /crypto\.randomUUID is not a function/,
+    /ucapi is not defined/,
+    /Identifier '(?:script|reportPage)' has already been declared/,
+    /getAttribute is not a function.*getAttribute\("role"\)/,
+    /^TypeError: Internal error$/,
+    /SCDynimacBridge/,
+    /errTimes is not defined/,
+    /Failed to get ServiceWorkerRegistration/,
+    /^ReferenceError: Cannot access uninitialized variable\.?$/,
+    /Failed writing data to the file system/,
+    /Error invoking initializeCallbackHandler/,
+    /releasePointerCapture.*Invalid pointer/,
+    /Array buffer allocation failed/,
+    /Client can't handle this message/,
+    /Invalid LngLat object/,
+    /autoReset/,
   ],
   beforeSend(event) {
     const msg = event.exception?.values?.[0]?.value ?? '';
@@ -331,7 +348,7 @@ if ('__TAURI_INTERNALS__' in window || '__TAURI__' in window) {
 if (!('__TAURI_INTERNALS__' in window) && !('__TAURI__' in window) && 'serviceWorker' in navigator) {
   // One-time nuke: clear stale SWs and caches from old deploys, then re-register fresh.
   // Safe to remove after 2026-03-20 when all users have cycled through.
-  const nukeKey = 'wm-sw-nuked-v1';
+  const nukeKey = 'wm-sw-nuked-v2';
   let alreadyNuked = false;
   try { alreadyNuked = !!localStorage.getItem(nukeKey); } catch { /* private browsing */ }
   if (!alreadyNuked) {
